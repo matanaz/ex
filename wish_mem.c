@@ -1,11 +1,12 @@
 #include <stdlib.h>
+#include <stdio.h>
 #include "wish_mem.h"
 
 #define ALLOC_MIN_SIZE 4 // power of 2 units
 #define ALLOC_MAX_VERTEX_SIZE 24 // power of 2 units
 #define ALLOC_MAX_EDGE_SIZE 32 // power of 2 units
 #define NUM_OF_POOLS (ALLOC_MAX_EDGE_SIZE -	ALLOC_MIN_SIZE + 1)
-#define POOL_MARGIN 3
+#define MIN_THRESHOLD 3
 #define GET_NEXT_POWER_OF_2_EXPONENT(_size_) ((sizeof(unsigned int)<<3) - \
 		__builtin_clz((_size_)-1))  
 #define GET_POOL_INDEX(_size_) (GET_NEXT_POWER_OF_2_EXPONENT((_size_)) - \
@@ -20,16 +21,16 @@ struct pool_element{
 struct buf_pool{
 	unsigned int free_num;
 	unsigned int busy_num;
-	unsigned int busy_average;
+	unsigned int busy_threshold;
 	struct pool_element* free_el_list;
 };  
 
 struct buf_pool pools [NUM_OF_POOLS];
 unsigned long long current_allocated_buffers;
 
-static struct pool_element* pool_pop_free_element(char pool_index)
+static struct pool_element* pool_pop_free_element(unsigned int pool_index)
 {
-	struct buf_pool* pool = pools + (int)pool_index;
+	struct buf_pool* pool = pools + pool_index;
 	struct pool_element* ret = pool->free_el_list;
 	if(ret){
 		pool->free_el_list = pool->free_el_list->next;
@@ -46,11 +47,12 @@ static void pool_push_free_element(struct pool_element* el)
 	pool->free_num++;
 }
 
-static void* pool_free_and_alloc(unsigned int size, char pool_index)
+static void* pool_free_and_alloc(unsigned int size, unsigned int pool_index)
 {
 	for(; pool_index < NUM_OF_POOLS; ++pool_index){
 		struct pool_element* ret = pool_pop_free_element(pool_index);
 		if (ret){
+			printf("free and alloc\n");
 			free(ret);
 			return malloc(size);
 		}
@@ -61,9 +63,20 @@ static void* pool_free_and_alloc(unsigned int size, char pool_index)
 static void free_all_pool_buffers(void)
 {
 	int pool_index=0;
+	struct pool_element* element;
 	for(; pool_index < NUM_OF_POOLS; ++pool_index){
-		while(pool_pop_free_element(pool_index));
+		while((element=pool_pop_free_element(pool_index))){
+			printf("Free(all) edge address %p\n",element);
+			free(element);
+		}
 	}
+}
+
+static void update_pool_busy_threshold(struct buf_pool* pool)
+{
+	pool->busy_threshold = (((pool->busy_threshold) << 1) +	pool->busy_num)/3;
+	pool->busy_threshold = pool->busy_threshold < MIN_THRESHOLD ? 
+		MIN_THRESHOLD : pool->busy_threshold;
 }
 
 void* allocateEdge(unsigned int size)
@@ -76,12 +89,12 @@ void* allocateEdge(unsigned int size)
 		if(!element && !(element = pool_free_and_alloc(
 			sizeof(struct pool_element) + size,pool_index+1)))
 			return NULL;
+		printf("Allocate edge address %p size %lu\n",element,sizeof(struct pool_element) + size);
 		element->pool_index = pool_index;
 	}
 	pool->busy_num++;
+	update_pool_busy_threshold(pool);
 	current_allocated_buffers++;
-	pool->busy_average = ((pool->busy_average >> 1) + pool->busy_num)/3 + 
-		POOL_MARGIN;  
 	return (void*)(element+1);
 }
 
@@ -90,7 +103,9 @@ void freeEdge(void* data)
 	struct pool_element* element = (struct pool_element*)data - 1;
 	struct buf_pool* pool = pools + (int)element->pool_index;
 	pool->busy_num--;
-	if(pool->busy_num + pool->free_num > pool->busy_average){
+	update_pool_busy_threshold(pool);
+	if(pool->busy_num + pool->free_num > pool->busy_threshold){
+		printf("Free edge address %p\n",element);
 		free(element);
 	}else{
 		pool_push_free_element(element);

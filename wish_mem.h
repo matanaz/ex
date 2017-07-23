@@ -9,7 +9,7 @@ extern"C" {
  * Allocate an edge for the graph in 2^i resolution
  * 
  * @param size
- *   Any size lower than 2^32 + 1,
+ *   Any size lower than 2^32 + 1 and higher than 2^4 - 1,
  *   non power of 2 size will be rounded up to next
  *   and will waste memory.
  * @return
